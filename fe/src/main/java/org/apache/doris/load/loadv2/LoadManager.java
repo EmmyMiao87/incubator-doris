@@ -32,6 +32,7 @@ import org.apache.doris.common.util.LogBuilder;
 import org.apache.doris.common.util.LogKey;
 import org.apache.doris.load.FailMsg;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -43,6 +44,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -221,17 +223,22 @@ public class LoadManager implements Writable{
         try {
             Map<String, List<LoadJob>> labelToLoadJobs = dbIdToLabelToLoadJobs.get(dbId);
             List<LoadJob> loadJobList = Lists.newArrayList();
-            // check label value
-            if (accurateMatch) {
-                if (!labelToLoadJobs.containsKey(labelValue)) {
-                    return loadJobInfos;
+            if (Strings.isNullOrEmpty(labelValue)) {
+                loadJobList.addAll(labelToLoadJobs.values()
+                                           .stream().flatMap(Collection::stream).collect(Collectors.toList()));
+            } else {
+                // check label value
+                if (accurateMatch) {
+                    if (!labelToLoadJobs.containsKey(labelValue)) {
+                        return loadJobInfos;
+                    }
+                    loadJobList.addAll(labelToLoadJobs.get(labelValue));
                 }
-                loadJobList.addAll(labelToLoadJobs.get(labelValue));
-            }
-            // non-accurate match
-            for (Map.Entry<String, List<LoadJob>> entry : labelToLoadJobs.entrySet()) {
-                if (entry.getKey().contains(labelValue)) {
-                    loadJobList.addAll(entry.getValue());
+                // non-accurate match
+                for (Map.Entry<String, List<LoadJob>> entry : labelToLoadJobs.entrySet()) {
+                    if (entry.getKey().contains(labelValue)) {
+                        loadJobList.addAll(entry.getValue());
+                    }
                 }
             }
 
