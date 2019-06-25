@@ -121,20 +121,11 @@ public class LoadAction extends RestBaseAction {
         if (backendIds == null) {
             throw new DdlException("No backend alive.");
         }
-
         Backend backend = Catalog.getCurrentSystemInfo().getBackend(backendIds.get(0));
         if (backend == null) {
             throw new DdlException("No backend alive.");
         }
-
         TNetworkAddress redirectAddr = new TNetworkAddress(backend.getHost(), backend.getHttpPort());
-
-        if (!isStreamLoad) {
-            String subLabel = request.getSingleParameter(SUB_LABEL_NAME_PARAM);
-            if (!Strings.isNullOrEmpty(subLabel)) {
-                redirectAddr = execEnv.getMultiLoadMgr().redirectAddr(fullDbName, label, tableName, redirectAddr);
-            }
-        }
 
         LOG.info("redirect load action to destination={}, stream: {}, db: {}, tbl: {}, label: {}",
                 redirectAddr.toString(), isStreamLoad, dbName, tableName, label);

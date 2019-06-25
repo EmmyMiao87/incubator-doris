@@ -69,6 +69,7 @@ import org.apache.doris.catalog.Catalog;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.load.EtlJobType;
+import org.apache.doris.load.FailMsg;
 import org.apache.doris.load.Load;
 
 /**
@@ -125,7 +126,9 @@ public class DdlExecutor {
                     ((CancelLoadStmt) ddlStmt).getDbName(), ((CancelLoadStmt) ddlStmt).getLabel())) {
                 catalog.getLoadInstance().cancelLoadJob((CancelLoadStmt) ddlStmt);
             } else {
-                catalog.getLoadManager().cancelLoadJob((CancelLoadStmt) ddlStmt);
+                catalog.getLoadManager().getUnfinishedLoadJob(null, ((CancelLoadStmt) ddlStmt).getDbName(),
+                                                              ((CancelLoadStmt) ddlStmt).getLabel())
+                        .cancelJob(new FailMsg(FailMsg.CancelType.USER_CANCEL, "user cancel"));
             }
         } else if (ddlStmt instanceof CreateRoutineLoadStmt) {
             catalog.getRoutineLoadManager().createRoutineLoadJob((CreateRoutineLoadStmt) ddlStmt, origStmt);

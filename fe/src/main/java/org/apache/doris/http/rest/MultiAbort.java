@@ -17,12 +17,15 @@
 
 package org.apache.doris.http.rest;
 
+import org.apache.doris.catalog.Catalog;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.DdlException;
+import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.http.ActionController;
 import org.apache.doris.http.BaseRequest;
 import org.apache.doris.http.BaseResponse;
 import org.apache.doris.http.IllegalArgException;
+import org.apache.doris.load.FailMsg;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.service.ExecuteEnv;
 
@@ -67,7 +70,12 @@ public class MultiAbort extends RestBaseAction {
             return;
         }
 
-        execEnv.getMultiLoadMgr().abort(fullDbName, label);
+        try {
+            Catalog.getCurrentCatalog().getLoadManager().getUnfinishedLoadJob(authInfo.cluster, db, label)
+                    .cancelJob(new FailMsg(FailMsg.CancelType.USER_CANCEL, "user cancel"));
+        } catch (MetaNotFoundException e) {
+            throw new DdlException(e.getMessage());
+        }
         sendResult(request, response, RestBaseResult.getOk());
     }
 }

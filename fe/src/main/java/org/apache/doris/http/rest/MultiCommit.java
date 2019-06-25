@@ -17,12 +17,17 @@
 
 package org.apache.doris.http.rest;
 
+import org.apache.doris.catalog.Catalog;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.DdlException;
+import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.http.ActionController;
 import org.apache.doris.http.BaseRequest;
 import org.apache.doris.http.BaseResponse;
 import org.apache.doris.http.IllegalArgException;
+import org.apache.doris.load.EtlJobType;
+import org.apache.doris.load.loadv2.LoadJob;
+import org.apache.doris.load.loadv2.MultiLoadJob;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.service.ExecuteEnv;
 
@@ -66,7 +71,16 @@ public class MultiCommit extends RestBaseAction {
         if (redirectToMaster(request, response)) {
             return;
         }
-        execEnv.getMultiLoadMgr().commit(fullDbName, label);
+        try {
+            LoadJob loadJob = Catalog.getCurrentCatalog().getLoadManager()
+                    .getUnfinishedLoadJob(authInfo.cluster, db, label);
+            if (loadJob.getJobType() != EtlJobType.MULTI) {
+                throw new DdlException("the load job " + label + " is not a multi load job");
+            }
+            ((MultiLoadJob) loadJob).tryCommit();
+        } catch (MetaNotFoundException e) {
+            throw new DdlException(e.getMessage());
+        }
         sendResult(request, response, RestBaseResult.getOk());
     }
 }

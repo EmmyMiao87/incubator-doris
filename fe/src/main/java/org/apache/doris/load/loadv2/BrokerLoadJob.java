@@ -38,6 +38,7 @@ import org.apache.doris.load.BrokerFileGroup;
 import org.apache.doris.load.EtlJobType;
 import org.apache.doris.load.FailMsg;
 import org.apache.doris.load.PullLoadSourceInfo;
+import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.service.FrontendOptions;
 import org.apache.doris.transaction.BeginTransactionException;
 import org.apache.doris.transaction.TabletCommitInfo;
@@ -105,6 +106,7 @@ public class BrokerLoadJob extends LoadJob {
         try {
             BrokerLoadJob brokerLoadJob = new BrokerLoadJob(db.getId(), stmt.getLabel().getLabelName(),
                                                             stmt.getBrokerDesc(), stmt.getDataDescriptions());
+            brokerLoadJob.checkAuth(PrivPredicate.LOAD, "CREATE LOAD");
             brokerLoadJob.setJobProperties(stmt.getProperties());
             brokerLoadJob.setDataSourceInfo(db, stmt.getDataDescriptions());
             return brokerLoadJob;
@@ -157,15 +159,21 @@ public class BrokerLoadJob extends LoadJob {
         if (database == null) {
             throw new MetaNotFoundException("Database " + dbId + "has been deleted");
         }
-        // The database will not be locked in here.
-        // The getTable is a thread-safe method called without read lock of database
-        for (long tableId : dataSourceInfo.getIdToFileGroups().keySet()) {
-            Table table = database.getTable(tableId);
-            if (table == null) {
-                throw new MetaNotFoundException("Failed to find table " + tableId + " in db " + dbId);
-            } else {
-                result.add(table.getName());
+        if (dataDescriptions.isEmpty()) {
+            // The database will not be locked in here.
+            // The getTable is a thread-safe method called without read lock of database
+            for (long tableId : dataSourceInfo.getIdToFileGroups().keySet()) {
+                Table table = database.getTable(tableId);
+                if (table == null) {
+                    throw new MetaNotFoundException("Failed to find table " + tableId + " in db " + dbId);
+                } else {
+                    result.add(table.getName());
+                }
             }
+            return result;
+        }
+        for (DataDescription dataDescription : dataDescriptions) {
+            result.add(dataDescription.getTableName());
         }
         return result;
     }
@@ -220,19 +228,17 @@ public class BrokerLoadJob extends LoadJob {
             }
             if (loadTask.getRetryTime() <= 0) {
                 executeCancel(failMsg, true);
-            } else {
-                // retry task
-                idToTasks.remove(loadTask.getSignature());
-                loadTask.updateRetryInfo();
-                idToTasks.put(loadTask.getSignature(), loadTask);
-                Catalog.getCurrentCatalog().getLoadTaskScheduler().submit(loadTask);
                 return;
             }
+            // retry task
+            idToTasks.remove(loadTask.getSignature());
+            loadTask.updateRetryInfo();
+            idToTasks.put(loadTask.getSignature(), loadTask);
+            Catalog.getCurrentCatalog().getLoadTaskScheduler().submit(loadTask);
+            return;
         } finally {
             writeUnlock();
         }
-
-        logFinalOperation();
     }
 
     /**

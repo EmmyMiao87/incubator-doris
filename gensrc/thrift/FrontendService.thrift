@@ -602,6 +602,23 @@ struct TSnapshotLoaderReportRequest {
     5: optional i32 total_num
 }
 
+struct TSubLoadCommitRequest {
+    1: optional string cluster
+    2: required string user
+    3: required string passwd
+    4: required string user_ip
+    5: required string db
+    6: required string tbl
+    7: required string label
+    8: required string sub_label
+    9: required bool is_successful
+    10: optional i64 abnormal_rows
+    11: optional i64 normal_rows
+    12: optional string tracking_url
+    13: optional list<Types.TTabletCommitInfo> commit_info_list
+    14: optional i64 auth_code
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1:TGetDbsParams params)
     TGetTablesResult getTableNames(1:TGetTablesParams params)
@@ -619,6 +636,9 @@ service FrontendService {
     TFeResult loadCheck(1:TLoadCheckRequest request)
     // this method is used for streaming mini load
     TMiniLoadBeginResult miniLoadBegin(TMiniLoadBeginRequest request)
+    // this method is used to commit streaming sub load
+    TFeResult commitSubLoad(TSubLoadCommitRequest request)
+
     TFeResult isMethodSupported(TIsMethodSupportedRequest request)
 
     TMasterOpResult forward(TMasterOpRequest params)

@@ -44,6 +44,7 @@ import java.util.Set;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+@Deprecated
 // Class used to record state of multi-load operation
 public class MultiLoadMgr {
     private static final Logger LOG = LogManager.getLogger(MultiLoadMgr.class);
@@ -51,8 +52,6 @@ public class MultiLoadMgr {
     private Map<LabelName, MultiLoadDesc> infoMap = Maps.newHashMap();
     private ReadWriteLock lock = new ReentrantReadWriteLock(true);
 
-    // Start multi-load transaction.
-    // Label is the only need parameter, maybe other properties?
     public void startMulti(String fullDbName, String label, Map<String, String> properties) throws DdlException {
         if (Strings.isNullOrEmpty(fullDbName)) {
             throw new DdlException("Database is empty");

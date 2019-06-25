@@ -17,23 +17,28 @@
 
 package org.apache.doris.http.rest;
 
+import org.apache.doris.catalog.Catalog;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.DdlException;
+import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.http.ActionController;
 import org.apache.doris.http.BaseRequest;
 import org.apache.doris.http.BaseResponse;
 import org.apache.doris.http.IllegalArgException;
+import org.apache.doris.load.EtlJobType;
+import org.apache.doris.load.loadv2.LoadJob;
+import org.apache.doris.load.loadv2.MultiLoadJob;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.service.ExecuteEnv;
 
 import com.google.common.base.Strings;
-import com.google.common.collect.Lists;
 
 import java.util.List;
 
 import io.netty.handler.codec.http.HttpMethod;
 
 // List all labels of one multi-load
+// Only unfinished multi-load can be desc by this api
 public class MultiDesc extends RestBaseAction {
     private static final String DB_KEY = "db";
     private static final String LABEL_KEY = "label";
@@ -71,9 +76,17 @@ public class MultiDesc extends RestBaseAction {
             return;
         }
 
-        final List<String> labels = Lists.newArrayList();
-        execEnv.getMultiLoadMgr().desc(fullDbName, label, labels);
-        sendResult(request, response, new Result(labels));
+        try {
+            LoadJob loadJob = Catalog.getCurrentCatalog().getLoadManager().getUnfinishedLoadJob(authInfo.cluster, db,
+                                                                                                label);
+            if (loadJob.getJobType() != EtlJobType.MULTI) {
+                throw new DdlException("Only multi load can be desc by this api");
+            }
+            List<String> subLabels = ((MultiLoadJob) loadJob).getSubLabels();
+            sendResult(request, response, new Result(subLabels));
+        } catch (MetaNotFoundException e) {
+            throw new DdlException(e.getMessage());
+        }
     }
 
     private static class Result extends RestBaseResult {

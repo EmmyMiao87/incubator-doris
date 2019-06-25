@@ -148,6 +148,29 @@ Status StreamLoadExecutor::begin_txn(StreamLoadContext* ctx) {
     return Status::OK();
 }
 
+Status StreamLoadExecutor::commit_sub_load(StreamLoadContext* ctx) {
+    TSubLoadCommitRequest request;
+    set_request_auth(&request, ctx->auth);
+    request.db = ctx->db;
+    request.tbl = ctx->table;
+    request.label = ctx->label;
+    request.sub_label = ctx->sub_label;
+    request.is_successful = ctx->status.ok();
+    request.__set_normal_rows(ctx->number_loaded_rows);
+    request.__set_abnormal_rows(ctx->number_filtered_rows);
+    request.__set_tracking_url(ctx->error_url);
+    request.__set_commit_info_list(ctx->commit_infos);
+
+    TNetworkAddress master_addr = _exec_env->master_info()->network_address;
+    TFeResult result;
+    RETURN_IF_ERROR(FrontendHelper::rpc(
+        master_addr.hostname, master_addr.port,
+        [&request, &result] (FrontendServiceConnection& client) {
+            client->commitSubLoad(result, request);
+        }));
+    return Status(result.status);
+}
+
 Status StreamLoadExecutor::commit_txn(StreamLoadContext* ctx) {
     DorisMetrics::txn_commit_request_total.increment(1);
 

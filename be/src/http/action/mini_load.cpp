@@ -358,14 +358,14 @@ int MiniLoadAction::on_header(HttpRequest* req) {
     return 0;
 }
 
-bool MiniLoadAction::_is_streaming(HttpRequest* req) { 
-    // multi load must be non-streaming
-    if (!req->param(SUB_LABEL_KEY).empty()) {
-        return false;
-    }
-
+bool MiniLoadAction::_is_streaming(HttpRequest* req) {
     TIsMethodSupportedRequest request;
-    request.__set_function_name(_streaming_function_name);
+    if (req->param(SUB_LABEL_KEY).empty()) {
+        request.__set_function_name(_streaming_mini_load_fn);
+	}
+    else {
+        request.__set_function_name(_streaming_multi_load_fn);
+    }
     const TNetworkAddress& master_address = _exec_env->master_info()->network_address;
     TFeResult res;
     Status status = FrontendHelper::rpc(
@@ -662,8 +662,12 @@ Status MiniLoadAction::_begin_mini_load(StreamLoadContext* ctx) {
         return begin_status;
     }
     ctx->txn_id = res.txn_id;
-    // txn has been begun in fe
-    ctx->need_rollback = true;
+    if (ctx->sub_label.empty()) {
+        // txn has been begun in fe
+        ctx->need_rollback = true;
+    }
+    // sub load don't need to rollback
+    
     return Status::OK();
 }
 
@@ -761,15 +765,19 @@ Status MiniLoadAction::_on_new_header(HttpRequest* req) {
     ctx->db = req->param(DB_KEY);
     ctx->table = req->param(TABLE_KEY);
     ctx->label = req->param(LABEL_KEY);
-    if(!req->param(SUB_LABEL_KEY).empty()) {
+    if (!req->param(SUB_LABEL_KEY).empty()) {
         ctx->sub_label = req->param(SUB_LABEL_KEY);
     }
     ctx->format = TFileFormatType::FORMAT_CSV_PLAIN;
     std::map<std::string, std::string> params(
             req->query_params().begin(), req->query_params().end());
-    auto max_filter_ratio_it = params.find(MAX_FILTER_RATIO_KEY);
-    if (max_filter_ratio_it != params.end()) {
-        ctx->max_filter_ratio = strtod(max_filter_ratio_it->second.c_str(), nullptr);
+    if (!ctx->sub_label.empty()) {
+        ctx->max_filter_ratio = 1.0;
+    } else {
+        auto max_filter_ratio_it = params.find(MAX_FILTER_RATIO_KEY);
+        if (max_filter_ratio_it != params.end()) {
+            ctx->max_filter_ratio = strtod(max_filter_ratio_it->second.c_str(), nullptr);
+        }
     }
     auto timeout_it = params.find(TIMEOUT_KEY);
     if (timeout_it != params.end()) {
@@ -806,6 +814,11 @@ void MiniLoadAction::_new_handle(HttpRequest* req) {
         }
     }
 
+    // sub load needs to be commit no matter success or failure
+    if (!ctx->sub_label.empty()) {
+        _exec_env->stream_load_executor()->commit_sub_load(ctx);
+    }
+
     if (!ctx->status.ok()) {
         if (ctx->need_rollback) {
             _exec_env->stream_load_executor()->rollback_txn(ctx);
@@ -837,9 +850,10 @@ Status MiniLoadAction::_on_new_handle(StreamLoadContext* ctx) {
     // wait stream load finish
     RETURN_IF_ERROR(ctx->future.get());
 
-    // commit this load with mini load attachment
-    RETURN_IF_ERROR(_exec_env->stream_load_executor()->commit_txn(ctx));
-
+    if (ctx->sub_label.empty()) {
+        // commit this load with mini load attachment
+        RETURN_IF_ERROR(_exec_env->stream_load_executor()->commit_txn(ctx));
+    }
     return Status::OK();
 }
 

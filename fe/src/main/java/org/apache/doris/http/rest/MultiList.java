@@ -17,12 +17,16 @@
 
 package org.apache.doris.http.rest;
 
+import org.apache.doris.catalog.Catalog;
+import org.apache.doris.catalog.Database;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.http.ActionController;
 import org.apache.doris.http.BaseRequest;
 import org.apache.doris.http.BaseResponse;
 import org.apache.doris.http.IllegalArgException;
+import org.apache.doris.load.EtlJobType;
+import org.apache.doris.load.loadv2.LoadJob;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.service.ExecuteEnv;
 
@@ -33,7 +37,7 @@ import java.util.List;
 
 import io.netty.handler.codec.http.HttpMethod;
 
-// list all multi load before commit
+// list all multi load in db
 public class MultiList extends RestBaseAction {
     private static final String DB_KEY = "db";
 
@@ -67,7 +71,14 @@ public class MultiList extends RestBaseAction {
         }
 
         final List<String> labels = Lists.newArrayList();
-        execEnv.getMultiLoadMgr().list(fullDbName, labels);
+        Database database = Catalog.getCurrentCatalog().getDb(fullDbName);
+        List<LoadJob> loadJobList = Catalog.getCurrentCatalog().getLoadManager()
+                .getLoadJobs(database.getId(), null, true, null);
+        for (LoadJob loadJob : loadJobList) {
+            if (loadJob.getJobType() == EtlJobType.MULTI) {
+                labels.add(loadJob.getLabel());
+            }
+        }
         sendResult(request, response, new Result(labels));
     }
 

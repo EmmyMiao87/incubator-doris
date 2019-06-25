@@ -18,6 +18,7 @@
 package org.apache.doris.http.rest;
 
 import org.apache.doris.analysis.LoadStmt;
+import org.apache.doris.catalog.Catalog;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.http.ActionController;
@@ -67,12 +68,13 @@ public class MultiStart extends RestBaseAction {
         String fullDbName = ClusterNamespace.getFullName(authInfo.cluster, db);
         checkDbAuth(authInfo, fullDbName, PrivPredicate.LOAD);
 
-        // Mutli start request must redirect to master, because all following sub requests will be handled
+        // Multi start request must redirect to master, because all following sub requests will be handled
         // on Master
         if (redirectToMaster(request, response)) {
             return;
         }
 
+        // step1: check metadata of multi load
         Map<String, String> properties = Maps.newHashMap();
         String[] keys = {LoadStmt.TIMEOUT_PROPERTY, LoadStmt.MAX_FILTER_RATIO_PROPERTY};
         for (String key : keys) {
@@ -81,7 +83,18 @@ public class MultiStart extends RestBaseAction {
                 properties.put(key, value);
             }
         }
-        execEnv.getMultiLoadMgr().startMulti(fullDbName, label, properties);
+        if (Strings.isNullOrEmpty(fullDbName)) {
+            throw new DdlException("Database is empty");
+        }
+
+        if (Strings.isNullOrEmpty(label)) {
+            throw new DdlException("Label is empty");
+        }
+
+        LoadStmt.checkProperties(properties);
+
+        // step2: try to add multi load in load manager and begin multi load
+        Catalog.getCurrentCatalog().getLoadManager().createLoadJobFromMultiLoad(fullDbName, label, properties);
         sendResult(request, response, RestBaseResult.getOk());
     }
 }

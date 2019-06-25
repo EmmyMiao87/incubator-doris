@@ -204,6 +204,10 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
      */
     abstract Set<String> getTableNames() throws MetaNotFoundException;
 
+    public EtlJobType getJobType() {
+        return jobType;
+    }
+
     public boolean isCompleted() {
         return state == JobState.FINISHED || state == JobState.CANCELLED;
     }
@@ -306,7 +310,6 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
         } finally {
             writeUnlock();
         }
-        logFinalOperation();
     }
 
     protected void executeJob() {
@@ -352,7 +355,6 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
         } finally {
             writeUnlock();
         }
-        logFinalOperation();
     }
 
     public void cancelJob(FailMsg failMsg) throws DdlException {
@@ -376,24 +378,23 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
                 throw new DdlException("Job could not be cancelled when job is finished or cancelled");
             }
 
-            checkAuth("CANCEL LOAD");
+            checkAuth(PrivPredicate.LOAD, "CANCEL LOAD");
             executeCancel(failMsg, true);
         } finally {
             writeUnlock();
         }
-        logFinalOperation();
     }
 
-    private void checkAuth(String command) throws DdlException {
+    protected void checkAuth(PrivPredicate privPredicate, String command) throws DdlException {
         if (authorizationInfo == null) {
             // use the old method to check priv
-            checkAuthWithoutAuthInfo(command);
+            checkAuthWithoutAuthInfo(privPredicate, command);
             return;
         }
         if (!Catalog.getCurrentCatalog().getAuth().checkPrivByAuthInfo(ConnectContext.get(), authorizationInfo,
                                                                        PrivPredicate.LOAD)) {
             ErrorReport.reportDdlException(ErrorCode.ERR_SPECIFIC_ACCESS_DENIED_ERROR,
-                                           PaloPrivilege.LOAD_PRIV);
+                                           privPredicate);
         }
     }
 
@@ -403,7 +404,7 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
      *
      * @throws DdlException
      */
-    private void checkAuthWithoutAuthInfo(String command) throws DdlException {
+    private void checkAuthWithoutAuthInfo(PrivPredicate privPredicate, String command) throws DdlException {
         Database db = Catalog.getInstance().getDb(dbId);
         if (db == null) {
             ErrorReport.reportDdlException(ErrorCode.ERR_BAD_DB_ERROR, dbId);
@@ -415,14 +416,14 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
             if (tableNames.isEmpty()) {
                 // forward compatibility
                 if (!Catalog.getCurrentCatalog().getAuth().checkDbPriv(ConnectContext.get(), db.getFullName(),
-                                                                       PrivPredicate.LOAD)) {
+                                                                       privPredicate)) {
                     ErrorReport.reportDdlException(ErrorCode.ERR_SPECIFIC_ACCESS_DENIED_ERROR,
                                                    PaloPrivilege.LOAD_PRIV);
                 }
             } else {
                 for (String tblName : tableNames) {
                     if (!Catalog.getCurrentCatalog().getAuth().checkTblPriv(ConnectContext.get(), db.getFullName(),
-                                                                            tblName, PrivPredicate.LOAD)) {
+                                                                            tblName, privPredicate)) {
                         ErrorReport.reportDdlException(ErrorCode.ERR_TABLEACCESS_DENIED_ERROR,
                                                        command,
                                                        ConnectContext.get().getQualifiedUser(),
@@ -436,7 +437,14 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
     }
 
     /**
-     * This method will cancel job without edit log and lock
+     * This method will cancel job without lock
+     * Situation1: Job is cancelled by aborted callback of txn.
+     *             Txn don't need to be aborted.
+     *             The final log don't need to be recorded.
+     *             The job will be cancelled by replayOnAborted when journal replay
+     * Situation2: Job is cancelled for some other reason
+     *             Txn need to be aborted.
+     *             The final log need to be recorded.
      *
      * @param failMsg
      * @param abortTxn true: abort txn when cancel job, false: only change the state of job and ignore abort txn
@@ -478,6 +486,9 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
 
         // change state
         state = JobState.CANCELLED;
+        if (abortTxn) {
+            logFinalOperation();
+        }
     }
 
     private void executeFinish() {
@@ -523,7 +534,7 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
         readLock();
         try {
             // check auth
-            checkAuth("SHOW LOAD");
+            checkAuth(PrivPredicate.SHOW, "SHOW LOAD");
             List<Comparable> jobInfo = Lists.newArrayList();
             // jobId
             jobInfo.add(id);
@@ -585,7 +596,7 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
     }
 
     public void getJobInfo(Load.JobInfo jobInfo) throws DdlException {
-        checkAuth("SHOW LOAD");
+        checkAuth(PrivPredicate.SHOW, "SHOW LOAD");
         jobInfo.tblNames.addAll(getTableNamesForShow());
         jobInfo.state = org.apache.doris.load.LoadJob.JobState.valueOf(state.name());
         if (failMsg != null) {
@@ -599,16 +610,22 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
     public static LoadJob read(DataInput in) throws IOException {
         LoadJob job = null;
         EtlJobType type = EtlJobType.valueOf(Text.readString(in));
-        if (type == EtlJobType.BROKER) {
-            job = new BrokerLoadJob();
-        } else if (type == EtlJobType.INSERT) {
-            job = new InsertLoadJob();
-        } else if (type == EtlJobType.MINI) {
-            job = new MiniLoadJob();
-        } else {
-            throw new IOException("Unknown load type: " + type.name());
+        switch (type){
+            case BROKER:
+                job = new BrokerLoadJob();
+                break;
+            case MINI:
+                job = new MiniLoadJob();
+                break;
+            case INSERT:
+                job = new InsertLoadJob();
+                break;
+            case MULTI:
+                job = new MultiLoadJob();
+                break;
+            default:
+                throw new IOException("Unknown load type: " + type.name());
         }
-
         job.isJobTypeRead(true);
         job.readFields(in);
         return job;
@@ -627,19 +644,6 @@ public abstract class LoadJob extends AbstractTxnStateChangeCallback implements 
                 throw new TransactionException("txn could not be committed when job has been cancelled");
             }
             isCommitting = true;
-        } finally {
-            writeUnlock();
-        }
-    }
-
-    @Override
-    public void afterCommitted(TransactionState txnState, boolean txnOperated) throws UserException {
-        if (txnOperated) {
-            return;
-        }
-        writeLock();
-        try {
-            isCommitting = false;
         } finally {
             writeUnlock();
         }

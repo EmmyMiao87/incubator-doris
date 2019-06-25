@@ -107,7 +107,13 @@ private:
    
     bool _is_streaming(HttpRequest* req);
 
-    const std::string _streaming_function_name = "STREAMING_MINI_LOAD";
+    // Function name of streaming mini load
+	// Used to check if streaming mini load is supported in fe
+    const std::string _streaming_mini_load_fn = "STREAMING_MINI_LOAD";
+
+    // Function name of streaming multi load
+	// Used to check if streaming multi load is supported in fe
+    const std::string _streaming_multi_load_fn = "STREAMING_MULTI_LOAD";
 
     ExecEnv* _exec_env;
 

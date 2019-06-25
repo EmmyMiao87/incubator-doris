@@ -31,14 +31,17 @@ import org.apache.doris.common.AuditLog;
 import org.apache.doris.common.AuthenticationException;
 import org.apache.doris.common.CaseSensibility;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.DdlException;
 import org.apache.doris.common.LabelAlreadyUsedException;
 import org.apache.doris.common.PatternMatcher;
 import org.apache.doris.common.ThriftServerContext;
 import org.apache.doris.common.ThriftServerEventProcessor;
 import org.apache.doris.common.UserException;
+import org.apache.doris.load.EtlJobType;
 import org.apache.doris.load.EtlStatus;
 import org.apache.doris.load.LoadJob;
 import org.apache.doris.load.MiniEtlTaskInfo;
+import org.apache.doris.load.loadv2.MultiLoadJob;
 import org.apache.doris.master.MasterImpl;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.planner.StreamLoadPlanner;
@@ -91,6 +94,7 @@ import org.apache.doris.thrift.TStatus;
 import org.apache.doris.thrift.TStatusCode;
 import org.apache.doris.thrift.TStreamLoadPutRequest;
 import org.apache.doris.thrift.TStreamLoadPutResult;
+import org.apache.doris.thrift.TSubLoadCommitRequest;
 import org.apache.doris.thrift.TTableStatus;
 import org.apache.doris.thrift.TUniqueId;
 import org.apache.doris.thrift.TUpdateExportTaskStatusRequest;
@@ -492,11 +496,52 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                                   request.getTbl(), request.getUser_ip(), PrivPredicate.LOAD);
             // step2: check label and record metadata in load manager
             if (request.isSetSub_label()) {
-                // TODO(ml): multi mini load
+                org.apache.doris.load.loadv2.LoadJob loadJob = Catalog.getCurrentCatalog().getLoadManager()
+                        .getUnfinishedLoadJob(request.getCluster(), request.getDb(), request.getLabel());
+                if (loadJob.getJobType() != EtlJobType.MULTI) {
+                    throw new DdlException("the load job " + request.getLabel() + " is not a multi load job");
+                }
+                // add sub load metadata in multi load
+                long txnId = ((MultiLoadJob) loadJob).addSubLoad(request.getSub_label(), request.getTbl(),
+                                                                 request.isSetCreate_timestamp() ?
+                                                                         request.getCreate_timestamp() : -1);
+                result.setTxn_id(txnId);
             } else {
                 // add load metadata in loadManager
                 result.setTxn_id(Catalog.getCurrentCatalog().getLoadManager().createLoadJobFromMiniLoad(request));
             }
+            return result;
+        } catch (UserException e) {
+            status.setStatus_code(TStatusCode.ANALYSIS_ERROR);
+            status.addToError_msgs(e.getMessage());
+            return result;
+        } catch (Throwable e) {
+            LOG.warn("catch unknown result.", e);
+            status.setStatus_code(TStatusCode.INTERNAL_ERROR);
+            status.addToError_msgs(Strings.nullToEmpty(e.getMessage()));
+            return result;
+        }
+    }
+
+    @Override
+    public TFeResult commitSubLoad(TSubLoadCommitRequest request) throws TException {
+        LOG.info("receive update sub load status request. label: {}, sub label:{}, user: {}, ip: {}",
+                 request.getLabel(), request.getSub_label(), request.getUser(), request.getUser_ip());
+        TStatus status = new TStatus(TStatusCode.OK);
+        TFeResult result = new TFeResult(FrontendServiceVersion.V1, status);
+        try {
+            String cluster = SystemInfoService.DEFAULT_CLUSTER;
+            if (request.isSetCluster()) {
+                cluster = request.getCluster();
+            }
+            checkPasswordAndPrivs(cluster, request.getUser(), request.getPasswd(), request.getDb(),
+                                  request.getTbl(), request.getUser_ip(), PrivPredicate.LOAD);
+            org.apache.doris.load.loadv2.LoadJob loadJob = Catalog.getCurrentCatalog().getLoadManager()
+                    .getUnfinishedLoadJob(cluster, request.getDb(), request.getLabel());
+            if (loadJob.getJobType() != EtlJobType.MULTI) {
+                throw new DdlException("the load job " + request.getLabel() + " is not a multi load job");
+            }
+            ((MultiLoadJob) loadJob).commitSubLoad(request);
             return result;
         } catch (UserException e) {
             status.setStatus_code(TStatusCode.ANALYSIS_ERROR);
@@ -516,6 +561,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         TFeResult result = new TFeResult(FrontendServiceVersion.V1, status);
         switch (request.getFunction_name()){
             case "STREAMING_MINI_LOAD":
+                break;
+            case "STREAMING_MULTI_LOAD":
                 break;
             default:
                 status.setStatus_code(NOT_IMPLEMENTED_ERROR);
