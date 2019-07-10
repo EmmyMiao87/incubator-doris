@@ -39,6 +39,7 @@ import org.apache.doris.transaction.TabletCommitInfo;
 import org.apache.doris.transaction.TransactionException;
 import org.apache.doris.transaction.TransactionState;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -171,19 +172,19 @@ public class MultiLoadJob extends LoadJob {
             if (subLoadInfo == null) {
                 throw new LoadException("There are no sub load named " + request.getSub_label() + " in load " + label);
             }
-            // step3: if sub load is failed
+            // step3: update loading status
+            if (request.isSetTracking_url() && request.getTracking_url() != null) {
+                loadingStatus.addTrackingUrl(request.getTracking_url());
+            }
             if (!request.isIs_successful()) {
-                subLoadInfo.setErrorMsg(request.getError_msg());
+                subLoadInfo.setErrorMsg(Strings.isNullOrEmpty(request.getError_msg()) ?
+                                                "Unknown reason" : request.getError_msg());
                 return;
             }
-            // step4: update loading status
             loadingStatus.replaceCounter(DPP_ABNORMAL_ALL,
                                          increaseCounter(DPP_ABNORMAL_ALL, request.getAbnormal_rows()));
             loadingStatus.replaceCounter(DPP_NORMAL_ALL,
                                          increaseCounter(DPP_NORMAL_ALL, request.getNormal_rows()));
-            if (request.isSetTracking_url()) {
-                loadingStatus.setTrackingUrl(request.getTracking_url());
-            }
             subLoadInfo.setCommitInfoList(TabletCommitInfo.fromThrift(request.getCommit_info_list()));
         } finally {
             writeUnlock();
