@@ -27,6 +27,8 @@ public class SubLoadInfo {
 
     // commit info
     private List<TabletCommitInfo> commitInfoList;
+    // failed msg
+    private String errorMsg;
 
     public SubLoadInfo(long tableId, long createTimestamp) {
         this.tableId = tableId;
@@ -47,7 +49,15 @@ public class SubLoadInfo {
         return commitInfoList;
     }
 
+    public String getErrorMsg() {
+        return errorMsg;
+    }
+
     public void setCommitInfoList(List<TabletCommitInfo> commitInfoList) {
         this.commitInfoList = commitInfoList;
+    }
+
+    public void setErrorMsg(String errorMsg) {
+        this.errorMsg = errorMsg;
     }
 }
