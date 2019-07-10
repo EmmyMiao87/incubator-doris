@@ -173,7 +173,7 @@ public class MultiLoadJob extends LoadJob {
             }
             // step3: if sub load is failed
             if (!request.isIs_successful()) {
-                subLoadInfo.setMsg(request.getError_msg());
+                subLoadInfo.setErrorMsg(request.getError_msg());
                 return;
             }
             // step4: update loading status
