@@ -173,8 +173,6 @@ public class MultiLoadJob extends LoadJob {
             }
             // step3: if sub load is failed
             if (!request.isIs_successful()) {
-                executeCancel(new FailMsg(FailMsg.CancelType.LOAD_RUN_FAIL, "sub load " + request.getSub_label()
-                        + " is failed"), true);
                 return;
             }
             // step4: update loading status
@@ -281,8 +279,8 @@ public class MultiLoadJob extends LoadJob {
         for (Map.Entry<String, SubLoadInfo> entity : subLoadLabelToSubLoadInfo.entrySet()) {
             SubLoadInfo subLoadInfo = entity.getValue();
             if (subLoadInfo.getCommitInfoList() == null) {
-                throw new LoadException("The multi load is cancelled because the empty commit info in sub load "
-                                                + entity.getKey());
+                throw new LoadException("The multi load is cancelled because sub load "
+                                                + entity.getKey() + " is failed or unfinished");
             }
             // get the tabletIdToCommitBackend in sub load
             Map<Long, Set<Long>> subLoadTabletIdToCommitBackends = Maps.newHashMap();
