@@ -450,7 +450,7 @@ public class LoadManager implements Writable{
         return loadJobInfos;
     }
 
-    public void getLoadJobInfo(Load.JobInfo info) throws DdlException, MetaNotFoundException {
+    public void getLoadJobInfo(Load.JobInfo info) throws DdlException {
         String fullDbName = ClusterNamespace.getFullName(info.clusterName, info.dbName);
         info.dbName = fullDbName;
         Database database = checkDb(info.dbName);
