@@ -69,7 +69,11 @@ public class EtlStatus implements Writable {
     }
 
     public void addTrackingUrl(String trackingUrl) {
-        this.trackingUrl += "," + trackingUrl;
+        if (trackingUrl.equalsIgnoreCase(DEFAULT_TRACKING_URL)) {
+            this.trackingUrl = trackingUrl;
+        } else {
+            this.trackingUrl += "," + trackingUrl;
+        }
     }
 
     public Map<String, String> getStats() {

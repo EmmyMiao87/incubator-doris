@@ -310,7 +310,7 @@ public class MultiLoadJob extends LoadJob {
                     // find the intersection of commit backends between load and sub load
                     loadCommitBackends.retainAll(subLoadCommitBackends);
                     if (loadCommitBackends.isEmpty()) {
-                        throw new LoadException("The tablet " + subLoadEntry.getKey() + "has no correct replica "
+                        throw new LoadException("The tablet " + subLoadEntry.getKey() + " has no correct replica "
                                                         + "between different sub load");
                     }
                 }
