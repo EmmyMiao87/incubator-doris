@@ -646,7 +646,7 @@ Status MiniLoadAction::_begin_mini_load(StreamLoadContext* ctx) {
     if (ctx->max_filter_ratio != 0.0) {
         request.__set_max_filter_ratio(ctx->max_filter_ratio);
     }
-    request.__set_create_timestamp(GetCurrentTimeMicros());
+    request.__set_create_timestamp(UnixMillis());
     // begin load by master
     const TNetworkAddress& master_addr = _exec_env->master_info()->network_address;
     TMiniLoadBeginResult res;
@@ -814,11 +814,6 @@ void MiniLoadAction::_new_handle(HttpRequest* req) {
         }
     }
 
-    // sub load needs to be commit no matter success or failure
-    if (!ctx->sub_label.empty()) {
-        _exec_env->stream_load_executor()->commit_sub_load(ctx);
-    }
-
     if (!ctx->status.ok()) {
         if (ctx->need_rollback) {
             _exec_env->stream_load_executor()->rollback_txn(ctx);
@@ -832,6 +827,11 @@ void MiniLoadAction::_new_handle(HttpRequest* req) {
         }
     }
 
+    // sub load needs to be commit no matter success or failure
+    if (!ctx->sub_label.empty()) {
+        _exec_env->stream_load_executor()->commit_sub_load(ctx);
+        ctx->status = Status::OK();
+    }
     std::string str = to_json(ctx->status);
     HttpChannel::send_reply(req, str);
 }

@@ -353,12 +353,14 @@ static const std::string CONVERTED_FLAG = "true";
 const std::string TABLET_ID_KEY = "tablet_id";
 const std::string TABLET_SCHEMA_HASH_KEY = "schema_hash";
 
+#ifndef RETURN_NOT_OK
 #define RETURN_NOT_OK(s) do { \
     OLAPStatus _s = (s);      \
     if (_s != OLAP_SUCCESS) { \
         return _s; \
     } \
 } while (0);
+#endif
 
 // Declare copy constructor and equal operator as private
 #ifndef DISALLOW_COPY_AND_ASSIGN

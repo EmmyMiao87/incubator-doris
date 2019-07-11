@@ -156,10 +156,15 @@ Status StreamLoadExecutor::commit_sub_load(StreamLoadContext* ctx) {
     request.label = ctx->label;
     request.sub_label = ctx->sub_label;
     request.is_successful = ctx->status.ok();
-    request.__set_normal_rows(ctx->number_loaded_rows);
-    request.__set_abnormal_rows(ctx->number_filtered_rows);
-    request.__set_tracking_url(ctx->error_url);
-    request.__set_commit_info_list(ctx->commit_infos);
+    if (ctx->status.ok()) {
+        request.__set_normal_rows(ctx->number_loaded_rows);
+        request.__set_abnormal_rows(ctx->number_filtered_rows);
+        request.__set_tracking_url(ctx->error_url);
+        request.__set_commit_info_list(ctx->commit_infos);
+    } else {
+        request.__set_error_msg(ctx->status.get_error_msg());
+        request.__set_tracking_url(ctx->error_url);
+    }
 
     TNetworkAddress master_addr = _exec_env->master_info()->network_address;
     TFeResult result;

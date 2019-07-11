@@ -616,7 +616,8 @@ struct TSubLoadCommitRequest {
     11: optional i64 normal_rows
     12: optional string tracking_url
     13: optional list<Types.TTabletCommitInfo> commit_info_list
-    14: optional i64 auth_code
+    14: optional string error_msg
+    15: optional i64 auth_code
 }
 
 service FrontendService {
