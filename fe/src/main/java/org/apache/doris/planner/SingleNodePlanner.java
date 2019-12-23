@@ -398,7 +398,7 @@ public class SingleNodePlanner {
             }
 
             boolean valueColumnValidate = true;
-            List<Expr> allConjuncts = analyzer.getAllConjunt(selectStmt.getTableRefs().get(0).getId());
+            List<Expr> allConjuncts = analyzer.getAllConjunct(selectStmt.getTableRefs().get(0).getId());
             List<SlotId> conjunctSlotIds = Lists.newArrayList();
             if (allConjuncts != null) {
                 for (Expr conjunct : allConjuncts) {
@@ -712,8 +712,26 @@ public class SingleNodePlanner {
 
         // add aggregation, if required
         if (aggInfo != null) root = createAggregationPlan(selectStmt, analyzer, root);
-
         return root;
+    }
+
+    public void selectMaterializedView(QueryStmt queryStmt, Analyzer analyzer) throws UserException {
+        if (queryStmt instanceof SelectStmt) {
+            MaterializedViewSelector materializedViewSelector = new MaterializedViewSelector(
+                    (SelectStmt) queryStmt, analyzer);
+            for (ScanNode scanNode : scanNodes) {
+                if (!(scanNode instanceof OlapScanNode)) {
+                    continue;
+                }
+                materializedViewSelector.selectBestMV(scanNode);
+            }
+        } else {
+            Preconditions.checkState(queryStmt instanceof UnionStmt);
+            UnionStmt unionStmt = (UnionStmt) queryStmt;
+            for (UnionStmt.UnionOperand unionOperand : unionStmt.getOperands()) {
+                selectMaterializedView(unionOperand.getQueryStmt(), analyzer);
+            }
+        }
     }
 
     /**

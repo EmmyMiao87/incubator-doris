@@ -133,7 +133,7 @@ public class Planner {
      * a list such that element i of that list can only consume output of the following fragments j > i.
      */
     public void createPlanFragments(StatementBase statement, Analyzer analyzer, TQueryOptions queryOptions)
-            throws NotImplementedException, UserException, AnalysisException {
+            throws UserException {
         QueryStmt queryStmt;
         if (statement instanceof InsertStmt) {
             queryStmt = ((InsertStmt) statement).getQueryStmt();
@@ -160,6 +160,8 @@ public class Planner {
         // TupleDescriptor.avgSerializedSize
         analyzer.getDescTbl().computeMemLayout();
         singleNodePlan.finalize(analyzer);
+        // materialized view selector
+        singleNodePlanner.selectMaterializedView(queryStmt, analyzer);
         if (queryOptions.num_nodes == 1) {
             // single-node execution; we're almost done
             singleNodePlan = addUnassignedConjuncts(analyzer, singleNodePlan);

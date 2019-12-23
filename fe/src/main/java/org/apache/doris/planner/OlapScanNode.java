@@ -19,6 +19,12 @@ package org.apache.doris.planner;
 
 import org.apache.doris.analysis.Analyzer;
 import org.apache.doris.analysis.BaseTableRef;
+import org.apache.doris.analysis.BinaryPredicate;
+import org.apache.doris.analysis.CastExpr;
+import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.InPredicate;
+import org.apache.doris.analysis.SlotDescriptor;
+import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.catalog.Catalog;
 import org.apache.doris.catalog.Column;
@@ -38,6 +44,8 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.UserException;
+import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.service.FrontendOptions;
 import org.apache.doris.system.Backend;
 import org.apache.doris.thrift.TExplainLevel;
@@ -69,24 +77,24 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 // Full scan of an Olap table.
 public class OlapScanNode extends ScanNode {
     private static final Logger LOG = LogManager.getLogger(OlapScanNode.class);
 
-    private List<TScanRangeLocations> result = new ArrayList<TScanRangeLocations>();
+    private List<TScanRangeLocations> result = new ArrayList<>();
     private boolean isPreAggregation = false;
     private String reasonOfPreAggregation = null;
     private boolean canTurnOnPreAggr = true;
     private boolean forceOpenPreAgg = false;
-    private ArrayList<String> tupleColumns = new ArrayList<String>();
-    private HashSet<String> predicateColumns = new HashSet<String>();
     private OlapTable olapTable = null;
     private long selectedTabletsNum = 0;
     private long totalTabletsNum = 0;
     private long selectedIndexId = -1;
     private int selectedPartitionNum = 0;
+    private Collection<Long> selectedPartitionIds = Lists.newArrayList();
     private long totalBytes = 0;
 
     // List of tablets will be scanned by current olap_scan_node
@@ -128,6 +136,66 @@ public class OlapScanNode extends ScanNode {
 
     public void setForceOpenPreAgg(boolean forceOpenPreAgg) {
         this.forceOpenPreAgg = forceOpenPreAgg;
+    }
+
+    public Collection<Long> getSelectedPartitionIds() {
+        return selectedPartitionIds;
+    }
+
+    public void updateScanRangeInfo(long selectedIndexId, boolean isPreAggregation, String reasonOfDisable)
+            throws UserException {
+        if (selectedIndexId == this.selectedIndexId && isPreAggregation == this.isPreAggregation) {
+            return;
+        }
+        StringBuilder stringBuilder = new StringBuilder("The new selected index id ")
+                .append(selectedIndexId)
+                .append(", pre aggregation tag ").append(isPreAggregation)
+                .append(", reason ").append(reasonOfDisable == null ? "null" : reasonOfDisable)
+                .append(". The old selected index id ").append(this.selectedIndexId)
+                .append(" pre aggregation tag ").append(this.isPreAggregation)
+                .append(" reason ").append(this.reasonOfPreAggregation == null ? "null" : this.reasonOfPreAggregation);
+        String scanRangeInfo = stringBuilder.toString();
+        boolean updateScanRangeInfo;
+        String situation;
+        CHECK:
+        {
+            if (olapTable.getKeysType() == KeysType.DUP_KEYS) {
+                updateScanRangeInfo = true;
+                situation = "The key type of table is duplicate.";
+                break CHECK;
+            }
+            if (ConnectContext.get() == null) {
+                updateScanRangeInfo = true;
+                situation = "Connection context is null";
+                break CHECK;
+            }
+            SessionVariable sessionVariable = ConnectContext.get().getSessionVariable();
+            if (sessionVariable.getTestMaterializedView()) {
+                throw new AnalysisException("The old scan range info is different from the new one when "
+                                                    + "test_materialized_view is true."
+                                                    + scanRangeInfo);
+            }
+            boolean useOldMVSelector = sessionVariable.useOldMVSelector();
+            if (useOldMVSelector) {
+                updateScanRangeInfo = false;
+                situation = "The use_old_mv_selector is true.";
+                break CHECK;
+            } else {
+                updateScanRangeInfo = true;
+                situation = "The use_old_mv_selector is false.";
+                break CHECK;
+            }
+        }
+
+        if (updateScanRangeInfo) {
+            this.selectedIndexId = selectedIndexId;
+            this.isPreAggregation = isPreAggregation;
+            this.reasonOfPreAggregation = reasonOfDisable;
+            computeTabletInfo();
+            LOG.info("Using the new scan range info instead of the old one. " + situation + scanRangeInfo);
+        } else {
+            LOG.info("Using the old scan range info instead of the new one. " + situation + scanRangeInfo);
+        }
     }
 
     public OlapTable getOlapTable() {
@@ -228,8 +296,7 @@ public class OlapScanNode extends ScanNode {
     private void addScanRangeLocations(Partition partition,
                                        MaterializedIndex index,
                                        List<Tablet> tablets,
-                                       long localBeId)
-            throws UserException, AnalysisException {
+                                       long localBeId) throws UserException {
 
         int logNum = 0;
         int schemaHash = olapTable.getSchemaHashByIndexId(index.getId());
@@ -312,45 +379,53 @@ public class OlapScanNode extends ScanNode {
         }
     }
 
-    private void getScanRangeLocations(Analyzer analyzer) throws UserException, AnalysisException {
+    private void getScanRangeLocations(Analyzer analyzer) throws UserException {
         long start = System.currentTimeMillis();
-        Collection<Long> partitionIds = partitionPrune(olapTable.getPartitionInfo());
-
-        if (partitionIds == null) {
-            partitionIds = new ArrayList<Long>();
+        // Step1: compute partition ids
+        selectedPartitionIds = partitionPrune(olapTable.getPartitionInfo());
+        if (selectedPartitionIds == null) {
+            selectedPartitionIds = Lists.newArrayList();
             for (Partition partition : olapTable.getPartitions()) {
                 if (!partition.hasData()) {
                     continue;
                 }
-                partitionIds.add(partition.getId());
+                selectedPartitionIds.add(partition.getId());
             }
         } else {
-            partitionIds = partitionIds.stream().filter(id -> olapTable.getPartition(id).hasData()).collect(
-                    Collectors.toList());
+            selectedPartitionIds = selectedPartitionIds.stream()
+                    .filter(id -> olapTable.getPartition(id).hasData())
+                    .collect(Collectors.toList());
         }
-
-        selectedPartitionNum = partitionIds.size();
-        LOG.debug("partition prune cost: {} ms, partitions: {}", (System.currentTimeMillis() - start), partitionIds);
-
-        start = System.currentTimeMillis();
-
-        if (olapTable.getKeysType() == KeysType.DUP_KEYS) {
-            isPreAggregation = true;
-        }
-
-        if (partitionIds.size() == 0) {
+        selectedPartitionNum = selectedPartitionIds.size();
+        LOG.debug("partition prune cost: {} ms, partitions: {}",
+                  (System.currentTimeMillis() - start), selectedPartitionIds);
+        if (selectedPartitionIds.size() == 0) {
             return;
         }
 
+        // Step2: select best rollup
+        start = System.currentTimeMillis();
+        if (olapTable.getKeysType() == KeysType.DUP_KEYS) {
+            isPreAggregation = true;
+        }
         final RollupSelector rollupSelector = new RollupSelector(analyzer, desc, olapTable);
-        selectedIndexId = rollupSelector.selectBestRollup(partitionIds, conjuncts, isPreAggregation);
+        selectedIndexId = rollupSelector.selectBestRollup(selectedPartitionIds, conjuncts, isPreAggregation);
+        LOG.debug("select best roll up cost: {} ms, best index id: {}",
+                  (System.currentTimeMillis() - start), selectedIndexId);
 
+        // Step3: compute tablet info by selected index id and selected partition ids
+        start = System.currentTimeMillis();
+        computeTabletInfo();
+        LOG.debug("distribution prune cost: {} ms", (System.currentTimeMillis() - start));
+    }
+
+    private void computeTabletInfo() throws UserException {
         long localBeId = -1;
         if (Config.enable_local_replica_selection) {
             localBeId = Catalog.getCurrentSystemInfo().getBackendIdByHost(FrontendOptions.getLocalHostAddress());
         }
 
-        for (Long partitionId : partitionIds) {
+        for (Long partitionId : selectedPartitionIds) {
             final Partition partition = olapTable.getPartition(partitionId);
             final MaterializedIndex selectedTable = partition.getIndex(selectedIndexId);
             final List<Tablet> tablets = Lists.newArrayList();
@@ -376,7 +451,6 @@ public class OlapScanNode extends ScanNode {
             selectedTabletsNum += tablets.size();
             addScanRangeLocations(partition, selectedTable, tablets, localBeId);
         }
-        LOG.debug("distribution prune cost: {} ms", (System.currentTimeMillis() - start));
     }
 
     /**
@@ -496,5 +570,108 @@ public class OlapScanNode extends ScanNode {
         TScanRangeLocations scanRangeLocations = new TScanRangeLocations();
 
         return olapScanNode;
+    }
+
+    public void collectColumns(Analyzer analyzer, Set<String> equivalenceColumns, Set<String> unequivalenceColumns) {
+        // 1. Get columns which has predicate on it.
+        for (Expr expr : conjuncts) {
+            if (!isPredicateUsedForPrefixIndex(expr, false)) {
+                continue;
+            }
+            for (SlotDescriptor slot : desc.getMaterializedSlots()) {
+                if (expr.isBound(slot.getId())) {
+                    if (!isEquivalenceExpr(expr)) {
+                        unequivalenceColumns.add(slot.getColumn().getName());
+                    } else {
+                        equivalenceColumns.add(slot.getColumn().getName());
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 2. Equal join predicates when pushing inner child.
+        List<Expr> eqJoinPredicate = analyzer.getEqJoinConjuncts(desc.getId());
+        for (Expr expr : eqJoinPredicate) {
+            if (!isPredicateUsedForPrefixIndex(expr, true)) {
+                continue;
+            }
+            for (SlotDescriptor slot : desc.getMaterializedSlots()) {
+                for (int i = 0; i < 2; i++) {
+                    if (expr.getChild(i).isBound(slot.getId())) {
+                        equivalenceColumns.add(slot.getColumn().getName());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+
+    private boolean isEquivalenceExpr(Expr expr) {
+        if (expr instanceof InPredicate) {
+            return true;
+        }
+        if (expr instanceof BinaryPredicate) {
+            final BinaryPredicate predicate = (BinaryPredicate) expr;
+            if (predicate.getOp().isEquivalence()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isPredicateUsedForPrefixIndex(Expr expr, boolean isJoinConjunct) {
+        if (!(expr instanceof InPredicate)
+                && !(expr instanceof BinaryPredicate)) {
+            return false;
+        }
+        if (expr instanceof InPredicate) {
+            return isInPredicateUsedForPrefixIndex((InPredicate) expr);
+        } else if (expr instanceof BinaryPredicate) {
+            if (isJoinConjunct) {
+                return isEqualJoinConjunctUsedForPrefixIndex((BinaryPredicate) expr);
+            } else {
+                return isBinaryPredicateUsedForPrefixIndex((BinaryPredicate) expr);
+            }
+        }
+        return true;
+    }
+
+    private boolean isEqualJoinConjunctUsedForPrefixIndex(BinaryPredicate expr) {
+        Preconditions.checkArgument(expr.getOp().isEquivalence());
+        if (expr.isAuxExpr()) {
+            return false;
+        }
+        for (Expr child : expr.getChildren()) {
+            for (SlotDescriptor slot : desc.getMaterializedSlots()) {
+                if (child.isBound(slot.getId()) && isSlotRefNested(child)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isBinaryPredicateUsedForPrefixIndex(BinaryPredicate expr) {
+        if (expr.isAuxExpr() || expr.getOp().isUnequivalence()) {
+            return false;
+        }
+        return (isSlotRefNested(expr.getChild(0)) && expr.getChild(1).isConstant())
+                || (isSlotRefNested(expr.getChild(1)) && expr.getChild(0).isConstant());
+    }
+
+    private boolean isInPredicateUsedForPrefixIndex(InPredicate expr) {
+        if (expr.isNotIn()) {
+            return false;
+        }
+        return isSlotRefNested(expr.getChild(0)) && expr.isLiteralChildren();
+    }
+
+    private boolean isSlotRefNested(Expr expr) {
+        while (expr instanceof CastExpr) {
+            expr = expr.getChild(0);
+        }
+        return expr instanceof SlotRef;
     }
 }

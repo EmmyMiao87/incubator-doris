@@ -18,11 +18,11 @@
 package org.apache.doris.alter;
 
 import org.apache.doris.alter.AlterJob.JobState;
-import org.apache.doris.analysis.CreateMaterializedViewStmt;
 import org.apache.doris.analysis.AddRollupClause;
 import org.apache.doris.analysis.AlterClause;
 import org.apache.doris.analysis.CancelAlterTableStmt;
 import org.apache.doris.analysis.CancelStmt;
+import org.apache.doris.analysis.CreateMaterializedViewStmt;
 import org.apache.doris.analysis.DropRollupClause;
 import org.apache.doris.analysis.MVColumnItem;
 import org.apache.doris.catalog.AggregateType;
@@ -46,6 +46,7 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
+import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.util.ListComparator;
 import org.apache.doris.common.util.PropertyAnalyzer;
 import org.apache.doris.common.util.Util;
@@ -53,13 +54,13 @@ import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.persist.DropInfo;
 import org.apache.doris.persist.EditLog;
 import org.apache.doris.qe.ConnectContext;
-import org.apache.doris.thrift.TStorageMedium;
 import org.apache.doris.thrift.TStorageFormat;
+import org.apache.doris.thrift.TStorageMedium;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
+import com.google.common.collect.Maps;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -70,7 +71,6 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /*
  * MaterializedViewHandler is responsible for ADD/DROP materialized view.
@@ -347,10 +347,14 @@ public class MaterializedViewHandler extends AlterHandler {
         boolean hasKey = false;
         boolean meetReplaceValue = false;
         KeysType keysType = olapTable.getKeysType();
+        Map<String, Column> baseColumnNameToColumn = Maps.newHashMap();
+        for (Column column : olapTable.getSchemaByIndexId(baseIndexId)) {
+            baseColumnNameToColumn.put(column.getName(), column);
+        }
         if (keysType.isAggregationFamily()) {
             int keysNumOfRollup = 0;
             for (String columnName : rollupColumnNames) {
-                Column oneColumn = olapTable.getColumn(columnName);
+                Column oneColumn = baseColumnNameToColumn.get(columnName);
                 if (oneColumn == null) {
                     throw new DdlException("Column[" + columnName + "] does not exist");
                 }
@@ -385,69 +389,41 @@ public class MaterializedViewHandler extends AlterHandler {
                 }
             }
         } else if (KeysType.DUP_KEYS == keysType) {
-            /*
-             * eg.
-             * Base Table's schema is (k1,k2,k3,k4,k5) dup key (k1,k2,k3).
-             * The following rollup is allowed:
-             * 1. (k1) dup key (k1)
-             * 2. (k2,k3) dup key (k2)
-             * 3. (k1,k2,k3) dup key (k1,k2)
-             *
-             * The following rollup is forbidden:
-             * 1. (k1) dup key (k2)
-             * 2. (k2,k3) dup key (k3,k2)
-             * 3. (k1,k2,k3) dup key (k2,k3)
-             */
+            // supplement the duplicate key
             if (addRollupClause.getDupKeys() == null || addRollupClause.getDupKeys().isEmpty()) {
-                // user does not specify duplicate key for rollup,
-                // use base table's duplicate key.
-                // so we should check if rollup columns contains all base table's duplicate key.
-                List<Column> baseIdxCols = olapTable.getSchemaByIndexId(baseIndexId);
-                Set<String> baseIdxKeyColNames = Sets.newHashSet();
-                for (Column baseCol : baseIdxCols) {
-                    if (baseCol.isKey()) {
-                        baseIdxKeyColNames.add(baseCol.getName());
+                int keyStorageLayoutBytes = 0;
+                for (int i = 0; i < rollupColumnNames.size(); i++) {
+                    String columnName = rollupColumnNames.get(i);
+                    Column baseColumn = baseColumnNameToColumn.get(columnName);
+                    if (baseColumn == null) {
+                        throw new DdlException("Column[" + columnName + "] does not exist in base index");
+                    }
+                    keyStorageLayoutBytes += baseColumn.getType().getStorageLayoutBytes();
+                    Column rollupColumn = new Column(baseColumn);
+                    if ((i + 1) <= FeConstants.shortkey_max_column_count
+                            || keyStorageLayoutBytes < FeConstants.shortkey_maxsize_bytes) {
+                        rollupColumn.setIsKey(true);
+                        rollupColumn.setAggregationType(null, false);
                     } else {
-                        break;
+                        rollupColumn.setIsKey(false);
+                        rollupColumn.setAggregationType(AggregateType.NONE, true);
                     }
-                }
-
-                boolean found = false;
-                for (String baseIdxKeyColName : baseIdxKeyColNames) {
-                    found = false;
-                    for (String rollupColName : rollupColumnNames) {
-                        if (rollupColName.equalsIgnoreCase(baseIdxKeyColName)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        throw new DdlException("Rollup should contains all base table's duplicate keys if "
-                                                       + "no duplicate key is specified: " + baseIdxKeyColName);
-                    }
-                }
-
-                // check (a)(b)
-                for (String columnName : rollupColumnNames) {
-                    Column oneColumn = olapTable.getColumn(columnName);
-                    if (oneColumn == null) {
-                        throw new DdlException("Column[" + columnName + "] does not exist");
-                    }
-                    if (oneColumn.isKey() && meetValue) {
-                        throw new DdlException("Invalid column order. key should before all values: " + columnName);
-                    }
-                    if (oneColumn.isKey()) {
-                        hasKey = true;
-                    } else {
-                        meetValue = true;
-                    }
-                    rollupSchema.add(oneColumn);
-                }
-
-                if (!hasKey) {
-                    throw new DdlException("No key column is found");
+                    rollupSchema.add(rollupColumn);
                 }
             } else {
+                /*
+                 * eg.
+                * Base Table's schema is (k1,k2,k3,k4,k5) dup key (k1,k2,k3).
+                * The following rollup is allowed:
+                * 1. (k1) dup key (k1)
+                * 2. (k2,k3) dup key (k2)
+                * 3. (k1,k2,k3) dup key (k1,k2)
+                *
+                * The following rollup is forbidden:
+                * 1. (k1) dup key (k2)
+                * 2. (k2,k3) dup key (k3,k2)
+                * 3. (k1,k2,k3) dup key (k2,k3)
+                */
                 // user specify the duplicate keys for rollup index
                 List<String> dupKeys = addRollupClause.getDupKeys();
                 if (dupKeys.size() > rollupColumnNames.size()) {
@@ -465,7 +441,8 @@ public class MaterializedViewHandler extends AlterHandler {
                         isKey = true;
                     }
 
-                    if (olapTable.getColumn(rollupColName) == null) {
+                    Column baseColumn = baseColumnNameToColumn.get(rollupColName);
+                    if (baseColumn == null) {
                         throw new DdlException("Column[" + rollupColName + "] does not exist");
                     }
 
@@ -473,7 +450,7 @@ public class MaterializedViewHandler extends AlterHandler {
                         throw new DdlException("Invalid column order. key should before all values: " + rollupColName);
                     }
 
-                    Column oneColumn = new Column(olapTable.getColumn(rollupColName));
+                    Column oneColumn = new Column(baseColumn);
                     if (isKey) {
                         hasKey = true;
                         oneColumn.setIsKey(true);

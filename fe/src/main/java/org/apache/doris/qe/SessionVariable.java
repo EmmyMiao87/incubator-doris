@@ -90,6 +90,8 @@ public class SessionVariable implements Serializable, Writable {
     public static final String LOAD_MEM_LIMIT = "load_mem_limit";
     public static final String DEFAULT_ROWSET_TYPE = "default_rowset_type";
     public static final String USE_V2_ROLLUP = "use_v2_rollup";
+    public static final String TEST_MATERIALIZED_VIEW = "test_materialized_view";
+    public static final String USE_OLD_MV_SELECTOR = "use_old_mv_selector";
 
     // max memory used on every backend.
     @VariableMgr.VarAttr(name = EXEC_MEM_LIMIT)
@@ -221,6 +223,14 @@ public class SessionVariable implements Serializable, Writable {
 
     @VariableMgr.VarAttr(name = USE_V2_ROLLUP)
     private boolean useV2Rollup = false;
+
+    // TODO(ml): remove it after test
+    @VariableMgr.VarAttr(name = TEST_MATERIALIZED_VIEW)
+    private boolean testMaterializedView = false;
+
+    // TODO(ml): change it after test
+    @VariableMgr.VarAttr(name = USE_OLD_MV_SELECTOR)
+    private boolean useOldMVSelector = true;
 
     public long getMaxExecMemByte() {
         return maxExecMemByte;
@@ -390,8 +400,12 @@ public class SessionVariable implements Serializable, Writable {
 
     public boolean getUseV2Rollup() { return useV2Rollup; }
 
-    public void setUseV2Rollup(boolean useV2Rollup) {
-        this.useV2Rollup = useV2Rollup;
+    public boolean getTestMaterializedView() {
+        return this.testMaterializedView;
+    }
+
+    public boolean useOldMVSelector() {
+        return useOldMVSelector;
     }
 
     // Serialize to thrift object
