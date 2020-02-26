@@ -91,6 +91,11 @@ public class SessionVariable implements Serializable, Writable {
     public static final String DEFAULT_ROWSET_TYPE = "default_rowset_type";
     public static final String USE_V2_ROLLUP = "use_v2_rollup";
     public static final String TEST_MATERIALIZED_VIEW = "test_materialized_view";
+    /**
+     * If the result between new and old selector is difference,
+     * the olap scan node will use the new range info instead of the old one.
+     */
+    public static final String USE_NEW_MV_SELECTOR = "use_new_mv_selector";
 
     // max memory used on every backend.
     @VariableMgr.VarAttr(name = EXEC_MEM_LIMIT)
@@ -226,6 +231,9 @@ public class SessionVariable implements Serializable, Writable {
     // TODO(ml): remove it after test
     @VariableMgr.VarAttr(name = TEST_MATERIALIZED_VIEW)
     private boolean testMaterializedView = false;
+
+    @VariableMgr.VarAttr(name = USE_NEW_MV_SELECTOR)
+    private boolean use_new_mv_selector = false;
 
     public long getMaxExecMemByte() {
         return maxExecMemByte;
@@ -401,6 +409,10 @@ public class SessionVariable implements Serializable, Writable {
 
     public void setTestMaterializedView(boolean testMaterializedView) {
         this.testMaterializedView = testMaterializedView;
+    }
+
+    public boolean isUse_new_mv_selector() {
+        return use_new_mv_selector;
     }
 
     // Serialize to thrift object

@@ -199,6 +199,11 @@ public class OlapScanNode extends ScanNode {
                                                     + "test_materialized_view is true. "
                                                     + scanRangeInfo);
             }
+            if (sessionVariable.isUse_new_mv_selector()) {
+                situation = "The session variable use_new_mv_selector is true.";
+                update = true;
+                break CHECK;
+            }
             situation = "The key type of table is aggregated.";
             update = false;
             break CHECK;

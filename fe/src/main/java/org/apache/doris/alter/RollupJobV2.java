@@ -304,7 +304,7 @@ public class RollupJobV2 extends AlterJobV2 {
         LOG.info("previous transactions are all finished, begin to send rollup tasks. job: {}", jobId);
         Database db = Catalog.getCurrentCatalog().getDb(dbId);
         if (db == null) {
-            throw new AlterCancelException("Databasee " + dbId + " does not exist");
+            throw new AlterCancelException("Database " + dbId + " does not exist");
         }
 
         db.readLock();
