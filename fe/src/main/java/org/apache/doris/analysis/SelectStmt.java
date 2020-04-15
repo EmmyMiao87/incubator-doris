@@ -54,6 +54,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -1011,14 +1012,7 @@ public class SelectStmt extends QueryStmt {
         // Collect the aggregate expressions from the SELECT, HAVING and ORDER BY clauses
         // of this statement.
         ArrayList<FunctionCallExpr> aggExprs = Lists.newArrayList();
-        TreeNode.collect(resultExprs, Expr.isAggregatePredicate(), aggExprs);
-        if (havingClauseAfterAnaylzed != null) {
-            havingClauseAfterAnaylzed.collect(Expr.isAggregatePredicate(), aggExprs);
-        }
-        if (sortInfo != null) {
-            // TODO: Avoid evaluating aggs in ignored order-bys
-            TreeNode.collect(sortInfo.getOrderingExprs(), Expr.isAggregatePredicate(), aggExprs);
-        }
+        collectAggregateExpr(aggExprs, getTableRefIds());
 
         // When DISTINCT aggregates are present, non-distinct (i.e. ALL) aggregates are
         // evaluated in two phases (see AggregateInfo for more details). In particular,
@@ -1135,10 +1129,46 @@ public class SelectStmt extends QueryStmt {
             }
         }
         if (havingPred != null) {
-            if (!havingPred.isBoundByTupleIds(groupingByTupleIds)) {
+            /**
+             * If the having predicate has correlated predicate,
+             */
+            if (!havingPred.isBoundByTupleIds(groupingByTupleIds) && analyzer.getParentAnalyzer() == null){
                 throw new AnalysisException(
                         "HAVING clause not produced by aggregation output " + "(missing from GROUP BY " +
                                 "clause?): " + havingClause.toSql());
+            }
+        }
+    }
+
+    /**
+     * Collect the aggregate expressions from the SELECT, HAVING and ORDER BY clauses of this statement.
+     * Collect the aggregate expressions from having subquery also.
+     * For example:
+     * select k1 from test group by k1 having exists(select k1 from baseall group by k1 having sum(test.k1)=k1);
+     * The sum(test.k1) should be collected.
+     */
+    @Override
+    protected void collectAggregateExpr(List<FunctionCallExpr> aggExprs, List<TupleId> tupleIdList) {
+        TreeNode.collect(resultExprs, Expr.isAggregatePredicate(), aggExprs);
+        if (havingClauseAfterAnaylzed != null) {
+            havingClauseAfterAnaylzed.collect(Expr.isAggregatePredicate(), aggExprs);
+            // collect the aggregate expr from subquery in having clause
+            List<Subquery> subqueryList = Lists.newArrayList();
+            havingClauseAfterAnaylzed.collect(Subquery.class, subqueryList);
+            for (Subquery subquery : subqueryList) {
+                subquery.getStatement().collectAggregateExpr(aggExprs, tupleIdList);
+
+            }
+        }
+        if (sortInfo != null) {
+            // TODO: Avoid evaluating aggs in ignored order-bys
+            TreeNode.collect(sortInfo.getOrderingExprs(), Expr.isAggregatePredicate(), aggExprs);
+        }
+
+        Iterator<FunctionCallExpr> itr = aggExprs.iterator();
+        while (itr.hasNext()) {
+            if (!itr.next().isBoundByTupleIds(tupleIdList)) {
+                itr.remove();
             }
         }
     }
@@ -1582,6 +1612,20 @@ public class SelectStmt extends QueryStmt {
 
         colLabels.clear();
         colLabels.addAll(newColLabels);
+    }
+
+    // TODO: support substitute subquery
+    @Override
+    protected void substitute(ExprSubstitutionMap smap, Analyzer analyzer, boolean preserveRootType)
+            throws AnalysisException {
+        if (whereClause != null) {
+            whereClause.reset();
+            whereClause = whereClause.substitute(smap, analyzer, preserveRootType);
+        }
+        if (havingClauseAfterAnaylzed != null) {
+            havingClauseAfterAnaylzed.reset();
+            havingClause = havingClauseAfterAnaylzed.substitute(smap, analyzer, preserveRootType);
+        }
     }
 
     public boolean hasWhereClause() {

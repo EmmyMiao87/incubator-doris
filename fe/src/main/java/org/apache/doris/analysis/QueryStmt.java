@@ -551,6 +551,11 @@ public abstract class QueryStmt extends StatementBase {
         return withClause_ != null ? withClause_.clone() : null;
     }
 
+    abstract void collectAggregateExpr(List<FunctionCallExpr> aggExprs, List<TupleId> tupleIdList);
+
+    abstract void substitute(ExprSubstitutionMap smap, Analyzer analyzer, boolean preserveRootType)
+            throws AnalysisException;
+
     /**
      * C'tor for cloning.
      */

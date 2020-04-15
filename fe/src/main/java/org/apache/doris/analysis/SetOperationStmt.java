@@ -616,6 +616,21 @@ public class SetOperationStmt extends QueryStmt {
         }
     }
 
+    @Override
+    protected void collectAggregateExpr(List<FunctionCallExpr> aggExprs, List<TupleId> tupleIdList) {
+        for (SetOperand operand : operands) {
+            operand.getQueryStmt().collectAggregateExpr(aggExprs, tupleIdList);
+        }
+    }
+
+    @Override
+    protected void substitute(ExprSubstitutionMap smap, Analyzer analyzer, boolean preserveRootType)
+            throws AnalysisException {
+        for (SetOperand operand : operands) {
+            operand.getQueryStmt().substitute(smap, analyzer, preserveRootType);
+        }
+    }
+
     /**
      * Represents an operand to a SetOperand. It consists of a query statement and its left
      * all/distinct qualifier (null for the first operand).

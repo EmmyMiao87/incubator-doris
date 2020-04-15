@@ -33,6 +33,8 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 
+import javax.management.Query;
+
 /**
  * Class representing a statement rewriter. A statement rewriter performs subquery
  * unnesting on an analyzed parse tree.
@@ -234,7 +236,13 @@ public class StmtRewriter {
             smap.put(leftExpr, rightExpr);
         }
         havingClause.reset();
+        List<Subquery> subqueryList = Lists.newArrayList();
+        havingClause.collect(Subquery.class, subqueryList);
+        for (Subquery subquery : subqueryList) {
+            subquery.getStatement().substitute(smap, analyzer, false);
+        }
         Expr newWherePredicate = havingClause.substitute(smap, analyzer, false);
+
         LOG.debug("Having predicate is changed to " + newWherePredicate.toSql());
         ArrayList<OrderByElement> newOrderByElements = null;
         if (orderByElements != null) {
@@ -514,7 +522,7 @@ public class StmtRewriter {
                     && ((BinaryPredicate) conjunct).getOp() == BinaryPredicate.Operator.EQ) {
                 return;
             }
-            throw new AnalysisException("scalar subquery's unCorrelatedPredicates's operator must be EQ");
+            throw new AnalysisException("scalar subquery's correlatedPredicates's operator must be EQ");
         }
     }
 
