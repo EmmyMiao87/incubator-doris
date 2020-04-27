@@ -205,7 +205,7 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
         MarkedCountDownLatch<Long, Long> countDownLatch = new MarkedCountDownLatch<>(totalReplicaNum);
         db.readLock();
         try {
-            OlapTable tbl = (OlapTable) db.getTable(tableId);
+            OlapTable tbl = (OlapTable) db.getTable(tableId);r
             if (tbl == null) {
                 throw new AlterCancelException("Table " + tableId + " does not exist");
             }

@@ -43,6 +43,10 @@ StringVal convert_bitmap_intersect_to_string(FunctionContext* ctx, BitmapInterse
     return result;
 }
 
+uint64_t rand(uint64_t min, uint64_t max) {
+    return (std::rand() % (max - min + 1)) + min;
+}
+
 class BitmapFunctionsTest : public testing::Test {
 public:
     BitmapFunctionsTest() = default;
@@ -185,6 +189,133 @@ TEST_F(BitmapFunctionsTest, bitmap_count) {
     BigIntVal null_bitmap = BitmapFunctions::bitmap_count(ctx, StringVal::null());
     ASSERT_EQ(BigIntVal(0), null_bitmap);
 }
+
+TEST_F(BitmapFunctionsTest, bitmap_intersect_finalize) {
+    std::string file_name = "bitmap_value";
+    std::ifstream file(file_name);
+    std::list<BitmapValue> bitmapList;
+    if (file.is_open()) {
+        uint64_t desrialize_data_time_ms = 0;
+        // convert file to bitmap
+        std::string line;
+        try {
+            while (std::getline(file, line)) {
+                BitmapValue bitmap;
+                // desrialize data
+                auto m_begin = std::chrono::high_resolution_clock::now();
+                bitmap.deserialize(line.c_str());
+                auto m_finish = std::chrono::high_resolution_clock::now();
+                desrialize_data_time_ms += std::chrono::duration_cast<std::chrono::milliseconds>(m_finish - m_begin).count();
+                bitmapList.push_back(bitmap);
+            } 
+        } catch (std::exception& e) {
+            LOG(ERROR) << e.what();
+        }
+        LOG(INFO) << "deserialize data, cost time:" << desrialize_data_time_ms << "ms";     
+    } else {
+        uint64_t min = 0;
+        uint64_t max = 30000000000;
+        int32_t init_data_time = 0;
+        uint64_t serialize_data_time_ms = 0;
+        std::ofstream out(file_name);
+
+        for (int i=0; i<7; i++) {
+            BitmapValue bitmap;
+            // init data
+            time_t begin = time(NULL);
+            for (int i = 0; i < 100000000; i++ ) {
+                bitmap.add(rand(min, max));
+            }
+            time_t finish = time(NULL); 
+            init_data_time += finish - begin;
+            bitmapList.push_back(bitmap);
+            // serialize data
+            auto m_begin = std::chrono::high_resolution_clock::now();
+            StringVal result(ctx, bitmap.getSizeInBytes());
+            bitmap.write((char*)result.ptr);
+            auto m_finish = std::chrono::high_resolution_clock::now();
+            serialize_data_time_ms += std::chrono::duration_cast<std::chrono::milliseconds>(m_finish - m_begin).count();
+            // write into file
+            out.write((char*)result.ptr, result.len);
+            out << std::endl;  
+        }  
+        LOG(INFO) << "init data, cost time: " << init_data_time << "s";
+        LOG(INFO) << "serialize data, cost time:" << serialize_data_time_ms << "ms";
+        out.close();
+    }
+
+    BitmapIntersect<int32_t> bitmapIntersect;
+    int key = 1;
+    for (BitmapValue bitmap: bitmapList) {
+        bitmapIntersect.add_key(key);
+        bitmapIntersect.update(key, bitmap);
+        key++;
+    }
+    
+    auto m_begin = std::chrono::high_resolution_clock::now();
+    uint64_t count = bitmapIntersect.intersect_count();
+    auto m_finish = std::chrono::high_resolution_clock::now();
+    LOG(INFO) << "intersect count finish, cost time: " << std::chrono::duration_cast<std::chrono::milliseconds>(m_finish - m_begin).count() << "ms";
+    LOG(INFO) << "intersect count result " << count; 
+
+}
+
+TEST_F(BitmapFunctionsTest,  bitmap_intersect_merge){
+    uint64_t min = 0;
+    uint64_t max = 30000000000;
+    int32_t init_data_time = 0;
+    uint64_t serialize_data_time_ms = 0;
+
+    std::list<BitmapValue> bitmapList;
+    for (int i=0; i<7; i++) {
+        BitmapValue bitmap;
+        // init data
+        time_t begin = time(NULL);
+        for (int i = 0; i < 100000000; i++ ) {
+            bitmap.add(rand(min, max));
+        }
+        time_t finish = time(NULL); 
+        init_data_time += finish - begin;
+        bitmapList.push_back(bitmap);
+        // serialize data
+        auto m_begin = std::chrono::high_resolution_clock::now();
+        StringVal result(ctx, bitmap.getSizeInBytes());
+        bitmap.write((char*)result.ptr);
+        auto m_finish = std::chrono::high_resolution_clock::now();
+        serialize_data_time_ms += std::chrono::duration_cast<std::chrono::milliseconds>(m_finish - m_begin).count();
+    }  
+    LOG(INFO) << "init data, cost time: " << init_data_time << "s";
+    LOG(INFO) << "serialize data, cost time:" << serialize_data_time_ms << "ms";
+
+    std::list<BitmapIntersect<int32_t>> bitmapIntersectList;
+    uint64_t update_intersect_time_ms = 0;
+    for (int i=0;i<7;i++) {
+        BitmapIntersect<int32_t> bitmapIntersect;
+        int key = 1;
+        for (BitmapValue bitmap: bitmapList) {
+            bitmapIntersect.add_key(key);
+            auto m_begin = std::chrono::high_resolution_clock::now();
+            bitmapIntersect.update(key, bitmap);
+            auto m_finish = std::chrono::high_resolution_clock::now();
+            update_intersect_time_ms += std::chrono::duration_cast<std::chrono::milliseconds>(m_finish - m_begin).count();
+            key++;
+        }
+        bitmapIntersectList.push_back(bitmapIntersect);
+    }
+    LOG(INFO) << "update intersect , cost time: " << update_intersect_time_ms << "ms";
+
+    BitmapIntersect<int32_t> result;
+    uint64_t merge_intersect_time_ms = 0;
+    for(BitmapIntersect<int32_t> bitmapIntersect: bitmapIntersectList) {
+        auto m_begin = std::chrono::high_resolution_clock::now();
+        result.merge(bitmapIntersect);
+        auto m_finish = std::chrono::high_resolution_clock::now();
+        merge_intersect_time_ms += std::chrono::duration_cast<std::chrono::milliseconds>(m_finish - m_begin).count();
+    }
+    LOG(INFO) << "merge intersect , cost time: " << merge_intersect_time_ms << "ms";
+
+}
+
 
 template<typename ValType, typename ValueType>
 void test_bitmap_intersect(FunctionContext* ctx, ValType key1, ValType key2) {
