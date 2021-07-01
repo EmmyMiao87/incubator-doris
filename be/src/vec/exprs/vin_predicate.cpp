@@ -49,8 +49,6 @@ doris::Status VInPredicate::prepare(doris::RuntimeState* state, const doris::Row
         return Status::InternalError("Unknown column type.");
     }
 
-    // expr data_type
-    _data_type = make_nullable(std::make_shared<DataTypeUInt8>());
     _expr_name = fmt::format("({} {} set)", _children[0]->expr_name(), _is_not_in ? "not_in" : "in");
     _is_prepare = true;
     return Status::OK();

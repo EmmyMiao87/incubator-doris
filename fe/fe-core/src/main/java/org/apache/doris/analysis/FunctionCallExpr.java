@@ -720,6 +720,14 @@ public class FunctionCallExpr extends Expr {
     }
 
     @Override
+    public boolean isNullable() {
+        if (fnName.getFunction().equals(FunctionSet.COUNT)) {
+            return false;
+        }
+        return true;
+    }
+
+    @Override
     public boolean isVectorized() {
         return false;
     }
